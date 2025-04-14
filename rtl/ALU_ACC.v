@@ -3,146 +3,78 @@
 // Company: 
 // Engineer: 
 // 
-// Create Date: 2025/03/19 19:12:31
-// Design Name: 
-// Module Name: ALU_ACC
+// Create Date: 2025/03/20 11:00:00
+// Design Name: Accumulator Register
+// Module Name: ACC
 // Project Name: 
 // Target Devices: 
 // Tool Versions: 
-// Description: 
+// Description: 16-bit Accumulator register with integrated ALU control.
+//              Loads result from ALU based on C22 enable signal.
+//              Feeds its current value back to the ALU.
 // 
-// Dependencies: 
+// Dependencies: ALU.v
 // 
 // Revision:
-// Revision 0.01 - File Created
-// Additional Comments:
+// Revision 1.00 - File Created
+// Additional Comments: Based on ALU.v and doc/寄组II预定义.md
 // 
 //////////////////////////////////////////////////////////////////////////////////
 
+module ALU_ACC (
+    // Clock and Reset
+    input wire clk,
+    input wire rst_n, // Active high reset
 
-module ALU_ACC(
-    input         clk,
-    input         rst_n,
-    input         C8,    // 清零：ACC<=0
-    input         C9,    // 加法：ACC<=ACC+BR_out
-    input         C13,   // 减法：ACC<=ACC-BR_out
-    input         C15,   // 乘法
-    input         C16,   // 除法
-    input         C17,   // 右移
-    input         C18,   // 左移
-    input         C19,   // 按位与
-    input         C20,   // 按位或
-    input         C21,   // 按位取反
-    input  [15:0] BR_out,
-    output [15:0] ALU_out,
-    output reg [3:0] ALUflags // {ZF, CF, OF, SF}，高电平有效
+    // Control Inputs
+    input wire C8, C9, C13, C15, C16, C17, C18, C19, C20, C21, // ALU Op Controls
+
+    // Data Input
+    input wire [15:0] BR_in, // Data input from Bus Register (for ALU)
+
+    // Data Outputs
+    output reg [15:0] ACC_out, // Current Accumulator Value
+    output reg [3:0] ALUflags // Flags from ALU {ZF, CF, OF, SF}
+);
+
+    // Internal wires for ALU outputs
+    wire [15:0] ALU_out_wire;
+    wire [3:0] ALUflags_wire;
+    
+    // Instantiate the Arithmetic Logic Unit (ALU)
+    ALU alu_inst (
+        // Control Inputs (Pass through)
+        .C8(C8), 
+        .C9(C9), 
+        .C13(C13), 
+        .C15(C15), 
+        .C16(C16), 
+        .C17(C17), 
+        .C18(C18), // Note: Markdown C17/C18 seem swapped vs ALU.v C17/C18 (SHL/SHR)
+        .C19(C19), 
+        .C20(C20), 
+        .C21(C21), // Note: Markdown C21 is NOT ACC, ALU.v C21 is NOT BR. Using ALU.v behavior.
+
+        // Data Inputs
+        .ACC_in(ACC_out), // Feed current ACC value to ALU
+        .BR_in(BR_in),    // Feed BR input to ALU
+
+        // Data Outputs
+        .ALU_out(ALU_out_wire),   // Get ALU result
+        .ALUflags(ALUflags_wire)  // Get ALU flags
     );
 
-    reg [15:0] ACC;
-    assign ALU_out = ACC;
-    reg signed [15:0] sACC, sBR;
-    reg signed [31:0] prod;
-    // 用于加/减时的中间变量
-    reg [16:0] tmp;
-
+    // Synchronous logic for the accumulator register and flags
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            ACC      <= 16'b0;
+            // Reset accumulator and flags to zero
+            ACC_out <= 16'b0;
             ALUflags <= 4'b0;
-        end
-        else begin
-            if (C8) begin
-                ACC      <= 16'b0;
-                // 结果为0：ZF=1，其余均为0
-                ALUflags <= {1'b1, 3'b0};
-            end
-            else if (C9) begin
-                // 加法：扩展一位计算进位
-                tmp = {1'b0, ACC} + {1'b0, BR_out};
-                ACC <= tmp[15:0];
-                // ZF：结果是否为0
-                ALUflags[3] <= (tmp[15:0] == 16'b0) ? 1'b1 : 1'b0;
-                // CF：进位标志（tmp最高位）
-                ALUflags[2] <= tmp[16];
-                // OF：若两个操作数符号相同，而结果符号与操作数不同，则溢出
-                ALUflags[1] <= ((ACC[15] == BR_out[15]) && (tmp[15] != ACC[15])) ? 1'b1 : 1'b0;
-                // SF：结果最高位
-                ALUflags[0] <= tmp[15];
-            end
-            else if (C13) begin
-                // 减法
-                tmp = {1'b0, ACC} - {1'b0, BR_out};
-                ACC <= tmp[15:0];
-                ALUflags[3] <= (tmp[15:0] == 16'b0) ? 1'b1 : 1'b0;
-                // 对于减法，通常将借位当作CF：当ACC<BR_out时置1
-                ALUflags[2] <= (ACC < BR_out) ? 1'b1 : 1'b0;
-                // OF：若两个操作数符号不同，且结果符号与被减数不同，则溢出
-                ALUflags[1] <= ((ACC[15] != BR_out[15]) && (tmp[15] != ACC[15])) ? 1'b1 : 1'b0;
-                ALUflags[0] <= tmp[15];
-            end
-            else if (C15) begin
-                // 使用有符号数进行乘法运算
-                sACC = ACC;
-                sBR  = BR_out;
-                prod = sACC * sBR;  // 32位乘积
-                // 更新ACC取低16位
-                ACC = prod[15:0];
-                // ZF：结果是否为0
-                ALUflags[3] <= (prod[15:0] == 16'b0) ? 1'b1 : 1'b0;
-                // CF暂时不用：置0
-                ALUflags[2] <= 1'b0;
-                // OF：检测乘法溢出，若高16位不为符号扩展，则溢出
-                ALUflags[1] <= (prod[31:16] != {16{prod[15]}}) ? 1'b1 : 1'b0;
-                // SF：取结果的最高位
-                ALUflags[0] <= prod[15];
-            end
-            else if (C16) begin
-                // 除法：注意除0问题未处理
-                ACC = ACC / BR_out;
-                ALUflags[3] <= (ACC == 16'b0) ? 1'b1 : 1'b0;
-                ALUflags[2] <= 1'b0;
-                ALUflags[1] <= 1'b0;
-                ALUflags[0] <= ACC[15];
-            end
-            else if (C17) begin
-                ACC = ACC >> 1;
-                ALUflags[3] <= (ACC == 16'b0) ? 1'b1 : 1'b0;
-                ALUflags[2] <= 1'b0;
-                ALUflags[1] <= 1'b0;
-                ALUflags[0] <= ACC[15];
-            end
-            else if (C18) begin
-                ACC = ACC << 1;
-                ALUflags[3] <= (ACC == 16'b0) ? 1'b1 : 1'b0;
-                ALUflags[2] <= 1'b0;
-                ALUflags[1] <= 1'b0;
-                ALUflags[0] <= ACC[15];
-            end
-            else if (C19) begin
-                ACC = ACC & BR_out;
-                ALUflags[3] <= (ACC == 16'b0) ? 1'b1 : 1'b0;
-                ALUflags[2] <= 1'b0;
-                ALUflags[1] <= 1'b0;
-                ALUflags[0] <= ACC[15];
-            end
-            else if (C20) begin
-                ACC = ACC | BR_out;
-                ALUflags[3] <= (ACC == 16'b0) ? 1'b1 : 1'b0;
-                ALUflags[2] <= 1'b0;
-                ALUflags[1] <= 1'b0;
-                ALUflags[0] <= ACC[15];
-            end
-            else if (C21) begin
-                ACC = ~ACC;
-                ALUflags[3] <= (ACC == 16'b0) ? 1'b1 : 1'b0;
-                ALUflags[2] <= 1'b0;
-                ALUflags[1] <= 1'b0;
-                ALUflags[0] <= ACC[15];
-            end
-            else begin
-                ACC <= ACC;
-                ALUflags <= ALUflags;
-            end
+        end else begin
+            // Update accumulator and flags in a single cycle
+            ACC_out <= ALU_out_wire;
+            ALUflags <= ALUflags_wire;
         end
     end
+
 endmodule
